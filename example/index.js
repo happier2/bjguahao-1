@@ -1,5 +1,6 @@
 const bjguahao = require('..');
 const fs = require("fs");
+const config = require('./config');
 const { SSL_OP_COOKIE_EXCHANGE } = require('constants');
 
 const input = prompt => new Promise((resolve, reject) => {
@@ -12,6 +13,34 @@ const input = prompt => new Promise((resolve, reject) => {
 const sleep = function (t) {
   return new Promise(res => setTimeout(res, t))
 }
+
+const doctorWeight = {
+  '知名专家': 1,
+  '专家': 2,
+  '主任医师': 3,
+  '副主任医师': 4,
+  '普通门诊': 5,
+}
+
+
+const printDoctors = function (zeroCode, doctors) {
+  console.log('-----------------------------------上午-----------------------------------');
+  doctors.data[0].detail.forEach(doctor => {
+    console.log(` - ${doctor.doctorName}(${doctor.doctorTitleName}) ${doctor.skill} ${doctor.uniqProductKey} ${doctor.ncode !== zeroCode ? '有' : '无'}号`);
+  });
+  console.log('-----------------------------------下午-----------------------------------');
+  doctors.data[1].detail.forEach(doctor => {
+    console.log(` - ${doctor.doctorName}(${doctor.doctorTitleName}) ${doctor.skill} ${doctor.uniqProductKey} ${doctor.ncode !== zeroCode ? '有' : '无'}号`);
+  });
+}
+
+const findZeroCode = function (doctor) {
+  const fcode = doctor.fcode; //"&#xf15e;&#xf128;&#xf128;";
+  const lastIndex = fcode.lastIndexOf('&');
+  const zeroCode = fcode.substr(lastIndex, 8);
+  return zeroCode;
+}
+
 
 process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = 0;
 
@@ -33,14 +62,17 @@ const datetime = (date, pattern) =>
   })[name] || `{${name}}`);
 
 (async () => {
+  const {
+    mobile,
+    hosCode,
+    firstDeptCode,
+    secondDeptCode,
+    target,
+    patientName,
+    doctorNames,
+  } = config;
 
-
-  const mobile = '13333333333';
-  const hosCode = "142";
-  const firstDeptCode = 'f8efd902e9f7048592ac0bc48d98c252'; //'76b059a760365aacb1a5ed0441128cab';
-  const secondDeptCode = '200039608'; //"200039524";
-  const target = '2020-08-25';
-  const patientName = '王爱玲';
+  console.log(`患者姓名: ${patientName}, 日期: ${target}, 候选医生: ${JSON.stringify(doctorNames)}`);
 
   let session = fs.readFileSync('cookie.txt').toString();
 
@@ -67,77 +99,96 @@ const datetime = (date, pattern) =>
     week: 1,
   };
 
-  const calendar = await bjguahao.calendar(session, calnederPayload);
-  // console.log(calendar);
+  // const calendar = await bjguahao.calendar(session, calnederPayload);
 
-
-
-  const doctorDetailPaylaod = {
+  const doctorDetailPayload = {
     firstDeptCode,
     hosCode,
     secondDeptCode,
     target,
   }
+
   let uniqProductKey = '';
   while (true) {
-    let zeroCode = '';
     console.log('开始查询当天数据...')
-    const doctors = await bjguahao.doctors(session, doctorDetailPaylaod);
-    console.log('上午');
-    doctors.data[0].detail.forEach(doctor => {
-      // console.log(doctor.fcode);
-      const fcode = doctor.fcode; //"&#xf15e;&#xf128;&#xf128;";
-      const lastIndex = fcode.lastIndexOf('&');
-      zeroCode = doctor.fcode.substr(lastIndex,8);
-      if (doctor.ncode !== zeroCode && uniqProductKey === '') {
-        uniqProductKey = doctor.uniqProductKey;
+    let doctors = await bjguahao.doctors(session, doctorDetailPayload);
+    let firstDoctor = doctors.data[0].detail[0] || doctors.data[1].detail[0];
+    let zeroCode = findZeroCode(firstDoctor);
+    console.log(zeroCode);
+    printDoctors(zeroCode, doctors);
+    do {
+      const availableDoctors = [];
+      doctors.data[0].detail.forEach(doctor => {
+        if (doctor.ncode !== zeroCode) {
+          availableDoctors.push({
+            ...doctor,
+            ampm: 0,
+          });
+        }
+      });
+      doctors.data[1].detail.forEach(doctor => {
+        if (doctor.ncode !== zeroCode) {
+          availableDoctors.push({
+            ...doctor,
+            ampm: 1,
+          });
+        }
+      });
+      if (availableDoctors.length !== 0) {
+        availableDoctors.sort((a, b) => {
+          return doctorWeight[a.doctorTitleName] - doctorWeight[b.doctorTitleName]
+        })
+        // console.log(JSON.stringify(availableDoctors));
+        const foundDoctor = availableDoctors.find(doctor => {
+          return doctorNames.indexOf(doctor.doctorName) > -1;
+        }) || availableDoctors[0];
+        uniqProductKey = foundDoctor.uniqProductKey;
+        console.log(`${foundDoctor.doctorName} ${foundDoctor.doctorTitleName} ${uniqProductKey}`);
+        break;
+      } else {
+        console.log('sleep 1 second');
+        await sleep(1);
+        doctors = await bjguahao.doctors(session, doctorDetailPayload);
+        firstDoctor = doctors.data[0].detail[0] || doctors.data[1].detail[0];;
+        zeroCode = findZeroCode(firstDoctor);
+        // console.log(zeroCode);
       }
-      console.log(` - ${doctor.doctorName}(${doctor.doctorTitleName}) ${doctor.skill} ${doctor.ncode !== zeroCode ? '有' : '无'}号`);
-    });
-    console.log('下午');
-    doctors.data[1].detail.forEach(doctor => {
-      console.log(` - ${doctor.doctorName}(${doctor.doctorTitleName}) ${doctor.skill} ${doctor.ncode !== zeroCode ? '有' : '无'}号`);
-    });
-    if (uniqProductKey !== '') {
+    } while (true);
+
+    const patients = await bjguahao.patients(session);
+    const patient = patients.data.list.find(item => item.patientName === patientName);
+    const { phone, idCardType: cardType, idCardNo: cardNo } = patient;
+
+    const smsPayload = {
+      mobile: phone,
+      smsKey: 'ORDER_CODE',
+      uniqProductKey,
+    }
+
+    await bjguahao.verifyCode(session, smsPayload);
+    const smsCode = await input('confirm sms-code:');
+
+    const savePayload = {
+      cardNo,
+      cardType,
+      dutyTime: 0,
+      firstDeptCode,
+      hosCode,
+      hospitalCardId: "",
+      orderFrom: "HOSP",
+      phone: phone,
+      secondDeptCode,
+      smsCode,
+      treatmentDay: target,
+      uniqProductKey,
+    }
+
+    try {
+      const result = await bjguahao.submit(session, savePayload);
+      console.log(`挂号成功! 订单号: ${result.data.orderNo}`);
       break;
-    } else {
-      console.log('sleep 1 second');
-      await sleep(1);
+    } catch (error) {
+      console.log(`挂号失败, 错误码: ${error.code}，错误描述: ${error.message}`)
     }
   }
-
-  const patients = await bjguahao.patients(session);
-  // console.log(patients);
-
-
-  const patient = patients.data.list.find(item => item.patientName === patientName);
-
-  const { phone, idCardType: cardType, idCardNo: cardNo } = patient;
-
-  const smsPayload = {
-    mobile: phone,
-    smsKey: 'ORDER_CODE',
-    uniqProductKey,
-  }
-
-  await bjguahao.verifyCode(session, smsPayload);
-  const smsCode = await input('confirm sms-code:');
-
-  const savePayload = {
-    cardNo,
-    cardType,
-    dutyTime: 0,
-    firstDeptCode,
-    hosCode,
-    hospitalCardId: "",
-    orderFrom: "HOSP",
-    phone: phone,
-    secondDeptCode,
-    smsCode,
-    treatmentDay: target,
-    uniqProductKey,
-  }
-
-  const result = await bjguahao.submit(session, savePayload);
-  console.log('挂号成功: ', result.data.orderNo);
 })();
