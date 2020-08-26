@@ -1,10 +1,8 @@
 const http = require('https');
-// const https = require('https');
 const assert = require('assert');
 const crypto = require('crypto-js');
 const qs = require('querystring');
 const HttpsProxyAgent = require('https-proxy-agent');
-const { stat } = require('fs');
 
 const ERROR_CODES = {
   812: '短信发送太频繁',

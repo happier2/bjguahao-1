@@ -108,10 +108,19 @@ const datetime = (date, pattern) =>
     target,
   }
 
+  const patients = await bjguahao.patients(session);
+  const patient = patients.data.list.find(item => item.patientName === patientName);
+  const { phone, idCardType: cardType, idCardNo: cardNo } = patient;
+
   let uniqProductKey = '';
   while (true) {
     console.log('开始查询当天数据...')
     let doctors = await bjguahao.doctors(session, doctorDetailPayload);
+    if (doctors.data.length === 0) {
+      console.log('还未开始放号, 稍后再试...');
+      await sleep(500);
+      continue;
+    }
     let firstDoctor = doctors.data[0].detail[0] || doctors.data[1].detail[0];
     let zeroCode = findZeroCode(firstDoctor);
     console.log(zeroCode);
@@ -146,8 +155,8 @@ const datetime = (date, pattern) =>
         console.log(`${foundDoctor.doctorName} ${foundDoctor.doctorTitleName} ${uniqProductKey}`);
         break;
       } else {
-        console.log('sleep 1 second');
-        await sleep(1);
+        console.log('sleeping...');
+        await sleep(500);
         doctors = await bjguahao.doctors(session, doctorDetailPayload);
         firstDoctor = doctors.data[0].detail[0] || doctors.data[1].detail[0];;
         zeroCode = findZeroCode(firstDoctor);
@@ -155,9 +164,7 @@ const datetime = (date, pattern) =>
       }
     } while (true);
 
-    const patients = await bjguahao.patients(session);
-    const patient = patients.data.list.find(item => item.patientName === patientName);
-    const { phone, idCardType: cardType, idCardNo: cardNo } = patient;
+
 
     const smsPayload = {
       mobile: phone,
@@ -185,7 +192,11 @@ const datetime = (date, pattern) =>
 
     try {
       const result = await bjguahao.submit(session, savePayload);
-      console.log(`挂号成功! 订单号: ${result.data.orderNo}`);
+      if (result.data.lineup === true) {
+        console.log('挂号成功，正在排队中...');
+      } else {
+        console.log(`挂号成功! 订单号: ${result.data.orderNo}`);
+      }
       break;
     } catch (error) {
       console.log(`挂号失败, 错误码: ${error.code}，错误描述: ${error.message}`)
