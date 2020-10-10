@@ -26,7 +26,7 @@ const request = (method, url, payload, rawHeaders) => {
     const req = http.request(url, {
       method,
       headers,
-      agent,
+      // agent, // 开启代理
     }, resolve);
     req.once('error', reject);
     req.end(payload);
